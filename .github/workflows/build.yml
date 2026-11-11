@@ -16,15 +16,10 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
           
-      - name: Install Dependencies
-        run: flutter pub get
-        working-directory: ./rahin_driver  # 👈 اگر اسم پوشه پروژه چیز دیگری است، اینجا تغییر دهید
-        
-      - name: Build APK
-        run: flutter build apk --release
-        working-directory: ./rahin_driver  # 👈 اگر اسم پوشه پروژه چیز دیگری است، اینجا تغییر دهید
-        
+      - run: flutter pub get
+      - run: flutter build apk --release
+      
       - uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: ./rahin_driver/build/app/outputs/flutter-apk/app-release.apk # 👈 اگر اسم پوشه پروژه چیز دیگری است، اینجا تغییر دهید
+          path: build/app/outputs/flutter-apk/app-release.apk
