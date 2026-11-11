@@ -13,17 +13,12 @@ jobs:
           
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.47.9'  # 👈 نسخه تغییر کرد
           channel: 'stable'
           
-      - name: Install Dependencies
-        run: flutter pub get
-        working-directory: .  # 👈 این خط یعنی همین پوشه‌ی فعلی
-        
-      - name: Build APK
-        run: flutter build apk --release
-        working-directory: .  # 👈 این خط یعنی همین پوشه‌ی فعلی
-        
+      - run: flutter pub get
+      - run: flutter build apk --release
+      
       - uses: actions/upload-artifact@v4
         with:
           name: app-release
