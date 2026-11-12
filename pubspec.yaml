@@ -24,7 +24,6 @@ dependencies:
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
   audioplayers: ^6.1.0
-  vibration: ^2.0.0
   dio: ^5.7.0
   shared_preferences: ^2.3.2
 
@@ -32,13 +31,14 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
   assets:
     - assets/sounds/offer_alert.mp3
     - assets/sounds/notification.mp3
-    - assets/images/logo_rahin.png # این خط را چک کنید
+    - assets/images/logo_rahin.png
 
   fonts:
     - family: Vazirmatn
@@ -47,3 +47,8 @@ flutter:
           weight: 400
         - asset: assets/fonts/Vazirmatn-Bold.ttf
           weight: 700
+          
+flutter_launcher_icons:
+  android: true  # 👈 این خط تغییر کرد
+  ios: false
+  image_path: "assets/images/logo_rahin.png"
