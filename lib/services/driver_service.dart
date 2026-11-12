@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class DriverService {
-  static const String baseUrl = 'http://localhost:5000/api/driver-app';
+  static const String baseUrl = 'http://10.189.102.187:5000/api/driver-app';
 
   static const Duration _timeout = Duration(seconds: 20);
 
