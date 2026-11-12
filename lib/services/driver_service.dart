@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class DriverService {
-
   // لیست IPهای ممکن برای تست
   static const List<String> baseUrls = [
     'http://10.189.102.187:5000/api/driver-app',  // IP ثابت لپ‌تاپ
@@ -16,9 +15,6 @@ class DriverService {
   static String _activeBaseUrl = baseUrls.first;
 
   static String get baseUrl => _activeBaseUrl;
-
-  static const String baseUrl = 'http://10.189.102.187:5000/api/driver-app';
-
 
   static const Duration _timeout = Duration(seconds: 20);
 
@@ -782,9 +778,4 @@ class DriverService {
       return false;
     }
   }
-
 }
-
-}
-}
-
