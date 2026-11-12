@@ -24,6 +24,10 @@ dependencies:
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
   audioplayers: ^6.1.0
+
+
+  
+
   dio: ^5.7.0
   shared_preferences: ^2.3.2
 
@@ -47,8 +51,11 @@ flutter:
           weight: 400
         - asset: assets/fonts/Vazirmatn-Bold.ttf
           weight: 700
+
           
 flutter_launcher_icons:
   android: true  # 👈 این خط تغییر کرد
   ios: false
   image_path: "assets/images/logo_rahin.png"
+
+
