@@ -24,7 +24,7 @@ dependencies:
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
   audioplayers: ^6.1.0
-  vibration: ^2.0.0
+  
   dio: ^5.7.0
   shared_preferences: ^2.3.2
 
