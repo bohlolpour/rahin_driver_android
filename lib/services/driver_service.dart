@@ -4,17 +4,28 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class DriverService {
-  // لیست IPهای ممکن برای تست
+  // لیست آدرس‌های ممکن (اولویت از بالا به پایین)
   static const List<String> baseUrls = [
-    'http://10.189.102.187:5000/api/driver-app',  // IP ثابت لپ‌تاپ
-    'http://192.168.43.1:5000/api/driver-app',   // IP هات‌اسپات اندروید
-    'http://192.168.137.1:5000/api/driver-app',  // IP هات‌اسپات ویندوز
-    'http://localhost:5000/api/driver-app',       // برای تست روی کامپیوتر
+    // ✅ آدرس دامنه اصلی (اولویت اول - HTTPS)
+    'https://www.rahinapp.ir/api/driver-app',
+    'https://rahinapp.ir/api/driver-app',
+    
+    // ✅ آدرس دامنه اصلی (HTTP - در صورتی که SSL هنوز کامل تنظیم نشده)
+    'http://www.rahinapp.ir/api/driver-app',
+    'http://rahinapp.ir/api/driver-app',
+
+    // 🧪 آدرس‌های تست (لوکال - فقط در زمان توسعه)
+    'http://10.189.102.187:5000/api/driver-app',
+    'http://192.168.43.1:5000/api/driver-app',
+    'http://192.168.137.1:5000/api/driver-app',
+    'http://localhost:5000/api/driver-app',
   ];
 
   static String _activeBaseUrl = baseUrls.first;
 
   static String get baseUrl => _activeBaseUrl;
+
+  // ... بقیه کدهای شما (متد findActiveServer و ...) بدون تغییر
 
   static const Duration _timeout = Duration(seconds: 20);
 
