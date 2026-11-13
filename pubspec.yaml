@@ -24,12 +24,9 @@ dependencies:
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
   audioplayers: ^6.1.0
-
-
-  
-
   dio: ^5.7.0
   shared_preferences: ^2.3.2
+  permission_handler: ^11.3.1   # 👈 برای درخواست دسترسی اعلان
 
 dev_dependencies:
   flutter_test:
@@ -52,10 +49,13 @@ flutter:
         - asset: assets/fonts/Vazirmatn-Bold.ttf
           weight: 700
 
-          
+# ============================================================
+# تنظیمات آیکون راه‌اندازی
+# ============================================================
 flutter_launcher_icons:
-  android: true  # 👈 این خط تغییر کرد
+  android: true
   ios: false
   image_path: "assets/images/logo_rahin.png"
-
-
+  adaptive_icon_background: "#080a0d"     # پس‌زمینه مشکی راهین
+  adaptive_icon_foreground: "assets/images/logo_rahin.png"
+  remove_alpha_ios: true

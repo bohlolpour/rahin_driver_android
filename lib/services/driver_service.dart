@@ -778,4 +778,25 @@ class DriverService {
       return false;
     }
   }
+
+  // ============================================================
+// BLOCK STATUS (چک کردن مسدودی راننده)
+// ============================================================
+static Future<Map<String, dynamic>> checkBlockStatus(String driverId) async {
+  try {
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/block-status/$driverId'),
+          headers: _headers,
+        )
+        .timeout(_timeout);
+    return _decodeResponse(response);
+  } catch (e) {
+    return {
+      'success': false,
+      'isBlocked': false,
+      'message': 'خطا در بررسی مسدودی: $e',
+    };
+  }
+}
 }

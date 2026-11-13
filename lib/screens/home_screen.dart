@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,19 +8,20 @@ import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_ti
 import 'package:latlong2/latlong.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../services/driver_service.dart';
 import '../services/location_service.dart';
+import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 
 import 'active_trip_screen.dart';
 import 'location_picker_modal.dart';
 import 'wallet_screen.dart';
 import 'orders_history_screen.dart';
-import 'package:geolocator/geolocator.dart';
 import 'shifts_screen.dart';
 import 'profile_screen.dart';
-import 'messages_screen.dart'; // 👈 اضافه شد
+import 'messages_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final String driverId;
@@ -37,7 +39,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const LatLng _defaultCenter = LatLng(37.2808, 49.5832);
 
   final MapController _mapController = MapController();
@@ -56,34 +58,67 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _locationTimer;
   Timer? _offersTimer;
   Timer? _activeTripTimer;
-  Timer? _messagesTimer; // 👈 تایمر پیام‌ها
+  Timer? _messagesTimer;
+  Timer? _blockCheckTimer; // ✅ جدید
 
   List<dynamic> _offers = [];
   List<Map<String, dynamic>> _activeTrips = [];
+  Set<String> _knownTripIds = {};
 
-  final Set<String> _seenOfferIds = {};
+  // ✅ کلید: (offerId, createdAt) برای تشخیص پیشنهادهای جدید
+  final Map<String, DateTime> _seenOffers = {};
 
   LatLng? _currentPosition;
   String? _avatarUrlFromProfile;
 
-  // 👈 متغیرهای پیام‌ها
   int _unreadMessagesCount = 0;
   int _lastUnreadCount = 0;
   OverlayEntry? _messageOverlay;
+  bool _isDriverBlocked = false;
+  String? _blockReason;
+  String? _blockType;
+  int? _blockRemainingHours;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _initLocation();
     _startTimers();
     _checkActiveTrips();
     _loadDriverProfile();
+    _checkBlockStatus(); // ✅ اولین چک فوری
 
     _activeTripTimer = Timer.periodic(
       const Duration(seconds: 8),
       (_) => _checkActiveTrips(),
     );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _messageOverlay?.remove();
+    _locationTimer?.cancel();
+    _offersTimer?.cancel();
+    _activeTripTimer?.cancel();
+    _messagesTimer?.cancel();
+    _blockCheckTimer?.cancel(); // ✅ جدید
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _checkBlockStatus(); // ✅ در بازگشت به اپ هم چک کن
+      if (_isOnline && _activeTrips.isEmpty) {
+        _refreshOffers(silent: true);
+      }
+      _checkActiveTrips();
+    }
   }
 
   // ============================================================
@@ -145,7 +180,6 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => MessagesScreen(driverId: widget.driverId),
       ),
     );
-    // بعد از بازگشت، تعداد پیام‌های خوانده نشده را بروزرسانی کن
     final count = await DriverService.getUnreadMessagesCount(widget.driverId);
     if (mounted) {
       setState(() {
@@ -164,7 +198,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final position = await LocationService.getCurrentPosition();
-
       if (!mounted) return;
 
       final point = position == null
@@ -237,18 +270,29 @@ class _HomeScreenState extends State<HomeScreen> {
       (_) => _sendCurrentLocation(),
     );
 
-    _offersTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    // ✅ تایمر چک مسدودی (هر ۴ ثانیه)
+    _blockCheckTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted) return;
+      _checkBlockStatus();
+    });
+
+    _offersTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
+      if (!mounted) return;
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      if (lifecycle != AppLifecycleState.resumed) return;
+
+      // ✅ اگه مسدود هست، پیشنهاد نگیر
+      if (_isDriverBlocked) return;
+
       if (_isOnline && _activeTrips.isEmpty) {
-        _refreshOffers(silent: true);
+        await _refreshOffers(silent: true);
       }
     });
 
-    // 👈 تایمر دریافت پیام‌های خوانده نشده
     _messagesTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       final count = await DriverService.getUnreadMessagesCount(widget.driverId);
       if (!mounted) return;
 
-      // اگر تعداد جدید از قبلی بیشتر بود، پاپ‌آپ نمایش داده شود
       if (count > _lastUnreadCount) {
         _showNewMessagePopup();
       }
@@ -258,17 +302,6 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => _unreadMessagesCount = count);
       }
     });
-  }
-
-  @override
-  void dispose() {
-    _messageOverlay?.remove();
-    _locationTimer?.cancel();
-    _offersTimer?.cancel();
-    _activeTripTimer?.cancel();
-    _messagesTimer?.cancel();
-    _audioPlayer.dispose();
-    super.dispose();
   }
 
   // ============================================================
@@ -363,6 +396,47 @@ class _HomeScreenState extends State<HomeScreen> {
       final newIds = trips.map((t) => t['id']?.toString() ?? '').toSet();
       final removedIds = previousIds.difference(newIds);
 
+      // ✅ سفرهای جدید = سفرهایی که در _knownTripIds نبودن
+      final addedIds = newIds.difference(_knownTripIds);
+
+      // ✅ اگر سفر جدیدی اضافه شده (از بک‌آفیس یا هر جای دیگر)
+      if (addedIds.isNotEmpty) {
+        final newTrip = trips.firstWhere(
+          (t) => addedIds.contains(t['id']?.toString() ?? ''),
+          orElse: () => <String, dynamic>{},
+        );
+
+        if (newTrip.isNotEmpty) {
+          _notifyNewOffer();
+
+          final orderId = newTrip['id']?.toString() ?? '';
+          final orderCode = newTrip['orderCode']?.toString() ?? '';
+          final originAddress = newTrip['originAddress']?.toString() ?? '';
+          final isFromBackoffice = newTrip['assignedByBackoffice'] == true;
+
+          NotificationService.showNewOfferNotification(
+            notificationId: orderId.hashCode,
+            orderCode: orderCode,
+            originAddress: originAddress,
+            destAddress: isFromBackoffice
+                ? 'سفارش از سمت پشتیبانی تخصیص یافت'
+                : 'سفر جدید',
+            price: '—',
+            orderId: orderId,
+          ).catchError((e) {
+            debugPrint('NOTIFICATION ERROR: $e');
+          });
+
+          if (mounted) {
+            _showMessage(
+              isFromBackoffice
+                  ? 'سفارش جدید از سمت پشتیبانی تخصیص یافت'
+                  : 'سفر جدید به شما تخصیص یافت',
+            );
+          }
+        }
+      }
+
       if (removedIds.isNotEmpty && _activeTrips.isNotEmpty) {
         try {
           await _audioPlayer.play(AssetSource('sounds/offer_alert.mp3'));
@@ -374,6 +448,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      _knownTripIds = newIds;
+
       setState(() {
         _activeTrips = trips;
         if (trips.isNotEmpty) {
@@ -382,6 +458,51 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       debugPrint('CHECK ACTIVE TRIPS ERROR: $e');
+    }
+  }
+
+  // ============================================================
+  // CHECK BLOCK STATUS (چک کردن مسدودی هر ۴ ثانیه)
+  // ============================================================
+  Future<void> _checkBlockStatus() async {
+    try {
+      final result = await DriverService.checkBlockStatus(widget.driverId);
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        final isBlocked = result['isBlocked'] == true;
+
+        if (isBlocked) {
+          setState(() {
+            _isDriverBlocked = true;
+            _blockReason = result['blockReason']?.toString();
+            _blockType = result['blockType']?.toString();
+            _blockRemainingHours = result['remainingHours'] != null
+                ? (result['remainingHours'] as num).toInt()
+                : null;
+
+            _isOnline = false;
+            _offers = [];
+          });
+
+          try {
+            _audioPlayer.stop();
+          } catch (_) {}
+        } else {
+          if (_isDriverBlocked) {
+            setState(() {
+              _isDriverBlocked = false;
+              _blockReason = null;
+              _blockType = null;
+              _blockRemainingHours = null;
+            });
+            _showMessage('مسدودی حساب شما رفع شد. می‌تونید آنلاین بشید.', isError: false);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('CHECK BLOCK STATUS ERROR: $e');
     }
   }
 
@@ -431,11 +552,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _offerIdentifier(dynamic offer) {
     if (offer is! Map) return '';
-    return (offer['offerId'] ?? offer['id'] ?? offer['orderId'] ?? '').toString();
+    return (offer['offerId'] ?? offer['id'] ?? '').toString();
   }
 
   Future<void> _refreshOffers({bool silent = false}) async {
-    if (_isFetchingOffers || !_isOnline || _activeTrips.isNotEmpty) return;
+    if (_isFetchingOffers || !_isOnline || _activeTrips.isNotEmpty || _isDriverBlocked) return;
 
     if (mounted) {
       setState(() => _isFetchingOffers = true);
@@ -446,12 +567,24 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
 
       final freshOffers = offers.where((offer) {
+        if (offer is! Map) return false;
         final id = _offerIdentifier(offer);
-        return id.isNotEmpty && !_seenOfferIds.contains(id);
+        if (id.isEmpty) return false;
+
+        final createdAtStr = offer['createdAt']?.toString() ?? '';
+        if (createdAtStr.isEmpty) {
+          return !_seenOffers.containsKey(id);
+        }
+
+        final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+        final lastSeen = _seenOffers[id];
+
+        if (lastSeen == null) return true;
+        return createdAt.isAfter(lastSeen);
       }).toList();
 
       setState(() {
-        _offers = offers;
+        _offers = freshOffers;
         _isFetchingOffers = false;
       });
 
@@ -461,12 +594,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (freshOffers.isNotEmpty) {
         for (final offer in freshOffers) {
+          if (offer is! Map) continue;
           final id = _offerIdentifier(offer);
+          final createdAtStr = offer['createdAt']?.toString() ?? '';
+          final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
           if (id.isNotEmpty) {
-            _seenOfferIds.add(id);
+            _seenOffers[id] = createdAt;
           }
         }
+
         _notifyNewOffer();
+
+        final firstOffer = freshOffers.first;
+        if (firstOffer is Map) {
+          final code = firstOffer['orderCode']?.toString() ?? '';
+          final origin = firstOffer['originAddress']?.toString() ?? '';
+          final dest = (firstOffer['destinations'] as List?)?.isNotEmpty == true
+              ? (firstOffer['destinations'] as List).first['address']?.toString() ?? ''
+              : firstOffer['destAddress']?.toString() ?? '';
+          final price = (double.tryParse(firstOffer['estimatedPrice']?.toString() ?? '') ?? 0).toStringAsFixed(0);
+          final orderId = firstOffer['orderId']?.toString() ?? '';
+
+          NotificationService.showNewOfferNotification(
+            notificationId: orderId.hashCode,
+            orderCode: code,
+            originAddress: origin,
+            destAddress: dest,
+            price: price,
+            orderId: orderId,
+          ).catchError((e) {
+            debugPrint('NOTIFICATION ERROR: $e');
+          });
+        }
+
         if (!_offerSheetOpen) {
           _showOfferSheet();
         }
@@ -474,7 +634,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (!silent) {
         _showMessage(
-          offers.isEmpty ? 'سفارش جدیدی یافت نشد' : '${offers.length} پیشنهاد سفارش دریافت شد',
+          offers.isEmpty ? 'سفارش جدیدی یافت نشد' : '${freshOffers.length} پیشنهاد سفارش دریافت شد',
         );
       }
     } catch (e) {
@@ -485,14 +645,21 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _notifyNewOffer() async {
-    HapticFeedback.vibrate();
+  void _notifyNewOffer() {
+    _audioPlayer.play(AssetSource('sounds/offer_alert.mp3')).then((_) {
+      debugPrint('✅ OFFER SOUND PLAYED');
+    }).catchError((e) {
+      debugPrint('❌ OFFER SOUND ERROR: $e');
+    });
+
     try {
-      await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
-    } catch (e) {
-      debugPrint('AUDIO PLAY ERROR: $e');
       SystemSound.play(SystemSoundType.alert);
-    }
+    } catch (_) {}
+
+    try {
+      HapticFeedback.heavyImpact();
+      HapticFeedback.vibrate();
+    } catch (_) {}
   }
 
   void _showOfferSheet() async {
@@ -652,6 +819,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    try {
+      final orderId = offerData?['orderId']?.toString() ?? '';
+      if (orderId.isNotEmpty) {
+        NotificationService.cancelNotification(orderId.hashCode);
+      }
+    } catch (_) {}
+
     final result = await DriverService.respondToOffer(
       offerId: offerId,
       driverId: widget.driverId,
@@ -666,7 +840,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    setState(() => _offers = []);
+    setState(() {
+      _offers = _offers.where((o) => _offerIdentifier(o) != offerId).toList();
+    });
 
     if (action == 'ACCEPT') {
       await _checkActiveTrips();
@@ -679,8 +855,12 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     } else {
-      _showMessage('پیشنهاد رد شد');
-      await _refreshOffers(silent: true);
+      _showMessage('پیشنهاد رد شد. منتظر پیشنهادهای جدید باشید...');
+
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) {
+        await _refreshOffers(silent: true);
+      }
     }
   }
 
@@ -689,6 +869,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   Future<void> _toggleOnline() async {
+    // ✅ اگه مسدود هست، اجازه نده
+    if (_isDriverBlocked) {
+      _showMessage('حساب شما مسدود است. نمی‌توانید آنلاین شوید.', isError: true);
+      return;
+    }
+
     if (_activeTrips.isNotEmpty) {
       _showMessage(
         'شما در حال حاضر ${_activeTrips.length} سفر فعال دارید. تا پایان سفرها نمی‌توانید آفلاین شوید.',
@@ -1795,45 +1981,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
           _buildActiveTripsList(),
 
-          if (_offers.isNotEmpty && _activeTrips.isEmpty)
-            Positioned(
-              top: _isManualLocation ? 130 : 90,
-              left: 16,
-              right: 16,
-              child: GestureDetector(
-                onTap: _showOfferSheet,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF202329),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: AppColors.primaryYellow),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 14)],
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.notifications_active, color: AppColors.primaryYellow),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '${_offers.length} پیشنهاد سفر دریافت شده',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const Text('مشاهده', style: TextStyle(color: AppColors.primaryYellow, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
           // MAP CONTROLS
           Positioned(
             bottom: navBarBaseHeight + 24,
             right: 16,
             child: Column(
               children: [
-                // 👈 دکمه پاکت نامه
                 GestureDetector(
                   onTap: _openMessagesScreen,
                   child: Stack(
@@ -2012,6 +2165,149 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
+          // ✅ کاور مسدودی (بالاترین لایه)
+          if (_isDriverBlocked)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.92),
+                child: SafeArea(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1A1C21),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.red.withValues(alpha: 0.5), width: 3),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.red.withValues(alpha: 0.3),
+                                  blurRadius: 30,
+                                  spreadRadius: 5,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.block,
+                              color: Colors.red,
+                              size: 72,
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+                          const Text(
+                            'حساب شما مسدود است',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          if (_blockType == 'PERMANENT')
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                              ),
+                              child: const Text(
+                                'نوع مسدودی: دائم',
+                                style: TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            )
+                          else if (_blockType == 'TEMPORARY')
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                              ),
+                              child: Text(
+                                _blockRemainingHours != null
+                                    ? 'نوع مسدودی: موقت (${_blockRemainingHours} ساعت باقی‌مانده)'
+                                    : 'نوع مسدودی: موقت',
+                                style: const TextStyle(
+                                  color: Colors.orangeAccent,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 20),
+                          if (_blockReason != null && _blockReason!.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF202329),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Column(
+                                children: [
+                                  const Text(
+                                    'دلیل مسدودی:',
+                                    style: TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    _blockReason!,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      height: 1.6,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 32),
+                          const Text(
+                            'برای رفع مسدودی با پشتیبانی راهین تماس بگیرید',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            onPressed: () => _openSupportWeb(),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryYellow,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            icon: const Icon(Icons.support_agent),
+                            label: const Text(
+                              'تماس با پشتیبانی',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

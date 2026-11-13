@@ -2,17 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
-import 'services/driver_service.dart'; // 👈 این خط اضافه شد
+import 'services/driver_service.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // پیدا کردن سرور فعال
+
+  // ۱. راه‌اندازی اعلان‌ها
+  await NotificationService.init();
+
+  // ۲. پیدا کردن سرور فعال
   final serverFound = await DriverService.findActiveServer();
   if (!serverFound) {
     debugPrint('NO SERVER FOUND!');
   }
-  
+
   runApp(const RahinApp());
 }
 
